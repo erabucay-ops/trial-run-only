@@ -592,14 +592,13 @@ async function getDistancesToOSM(lat, lng) {
    ========================= */
 async function loadProvinceBoundary(provName) {
   const provKey = String(provName || "").toUpperCase().trim();
-
   currentProvince = provKey;
   el('provName').textContent = provKey;
 
   const msg = el('msg');
-  el('provMsg').innerHTML = `Loading boundary for <b>${provKey}</b> (local file)…`;
+  el('provMsg').innerHTML = `Loading boundary for <b>${provKey}</b>…`;
 
-  // Cache to avoid re-fetching
+  // Cache
   if (boundaryCache.has(provKey)) {
     const gj = boundaryCache.get(provKey);
     if (lagunaBoundaryLayer) map.removeLayer(lagunaBoundaryLayer);
@@ -612,41 +611,80 @@ async function loadProvinceBoundary(provName) {
     return;
   }
 
-  // Local boundaries (GitHub Pages): /boundaries/PROVINCE.geojson (CAPS, exact match)
-  // Use absolute URL based on current page so it works for repo subpaths (e.g., /trial-run-only/)
   const base = new URL('.', window.location.href).href;
-  const url = `${base}boundaries/${encodeURIComponent(provKey)}.geojson`;
 
-  try {
-    const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  // Try multiple likely locations to tolerate repo structure differences.
+  const candidateUrls = [
+    `${base}boundaries/${encodeURIComponent(provKey)}.geojson`,           // /trial-run-only/boundaries/PROV.geojson
+    `${base}BOUNDARIES/${encodeURIComponent(provKey)}.geojson`,           // if folder caps
+    `${base}boundaries/${encodeURIComponent(provKey)}.json`,              // if json extension
+    `${base}${encodeURIComponent(provKey)}.geojson`,                      // if placed at root by accident
+    `${base}data/boundaries/${encodeURIComponent(provKey)}.geojson`,      // common alternative structure
+    `./boundaries/${encodeURIComponent(provKey)}.geojson`,                // relative fallback
+  ];
 
-    const gj = await res.json();
+  const timeoutMs = 12000;
 
-    boundaryCache.set(provKey, gj);
-
-    if (lagunaBoundaryLayer) map.removeLayer(lagunaBoundaryLayer);
-    lagunaBoundaryLayer = L.geoJSON(gj, { style: { color: '#5dd6ff', weight: 2, fillOpacity: 0.06 } }).addTo(map);
-
-    // Use Leaflet-normalized GeoJSON for clip checks (more robust)
-    try { currentProvinceGeoJSON = lagunaBoundaryLayer.toGeoJSON(); } catch (e) {}
-
-    const b = lagunaBoundaryLayer.getBounds();
-    if (b && b.isValid && b.isValid()) map.fitBounds(b, { padding:[14,14] });
-
-    msg.innerHTML = 'Tap/click the map to evaluate a location.';
-    el('provMsg').innerHTML = `Selected province: <b>${provKey}</b>. Click the map to evaluate a site.`;
-
-  } catch (err) {
-    // Hard fail (no Overpass fallback): this is intentional to avoid 429 and ensure stable teaching tool behavior.
-    el('provMsg').innerHTML =
-      `<span class="bad">Could not load ${provKey} boundary.</span><br/>
-       Expected file: <span class="mono">${url}</span><br/>
-       Fix: ensure <b>/boundaries/${provKey}.geojson</b> exists in your GitHub Pages site (CAPS, exact filename).`;
-    if (msg) msg.innerHTML = 'Boundary missing. Please pick a different province or fix the boundary file.';
-    console.error('Boundary load failed:', err);
+  async function fetchJsonWithTimeout(url) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { cache: 'no-store', signal: ctrl.signal, headers: { 'Accept': 'application/json' }});
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      // GitHub Pages serves geojson as application/json or text/plain; both are fine.
+      const text = await res.text();
+      const gj = JSON.parse(text);
+      return gj;
+    } finally {
+      clearTimeout(t);
+    }
   }
+
+  let lastErr = null;
+
+  for (const url of candidateUrls) {
+    try {
+      el('provMsg').innerHTML = `Loading boundary for <b>${provKey}</b>…<br/><span class="mono">${url}</span>`;
+      const gj = await fetchJsonWithTimeout(url);
+
+      boundaryCache.set(provKey, gj);
+
+      if (lagunaBoundaryLayer) map.removeLayer(lagunaBoundaryLayer);
+      lagunaBoundaryLayer = L.geoJSON(gj, { style: { color: '#5dd6ff', weight: 2, fillOpacity: 0.06 } }).addTo(map);
+
+      try { currentProvinceGeoJSON = lagunaBoundaryLayer.toGeoJSON(); } catch (e) {}
+
+      const b = lagunaBoundaryLayer.getBounds();
+      if (b && b.isValid && b.isValid()) map.fitBounds(b, { padding:[14,14] });
+
+      msg.innerHTML = 'Tap/click the map to evaluate a location.';
+      el('provMsg').innerHTML = `Selected province: <b>${provKey}</b>. Click the map to evaluate a site.`;
+
+      return;
+
+    } catch (err) {
+      lastErr = err;
+      continue;
+    }
+  }
+
+  // Hard fail with clear diagnostics
+  const tried = candidateUrls.map(u => `<li><span class="mono">${u}</span></li>`).join('');
+  el('provMsg').innerHTML =
+    `<span class="bad">Boundary load failed for ${provKey}.</span><br/>
+     Last error: <span class="mono">${(lastErr && (lastErr.message || lastErr))}</span><br/>
+     <details style="margin-top:8px">
+       <summary>URLs tried</summary>
+       <ol style="margin:6px 0 0 18px">${tried}</ol>
+     </details>
+     <div style="margin-top:8px">
+       Fix: ensure the file exists on GitHub Pages (case-sensitive), e.g. <b>/boundaries/${provKey}.geojson</b>.
+     </div>`;
+  if (msg) msg.innerHTML = 'Boundary missing. Please pick a different province or fix the boundary file.';
+  console.error('Boundary load failed:', lastErr);
 }
+
 
 
 
