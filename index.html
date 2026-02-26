@@ -615,12 +615,17 @@ async function loadProvinceBoundary(provName) {
 
   // Try multiple likely locations to tolerate repo structure differences.
   const candidateUrls = [
-    `${base}boundaries/${encodeURIComponent(provKey)}.geojson`,           // /trial-run-only/boundaries/PROV.geojson
-    `${base}BOUNDARIES/${encodeURIComponent(provKey)}.geojson`,           // if folder caps
-    `${base}boundaries/${encodeURIComponent(provKey)}.json`,              // if json extension
+    `${base}boundary/${encodeURIComponent(provKey)}.geojson`,             // current repo uses /boundary/
+    `${base}boundaries/${encodeURIComponent(provKey)}.geojson`,           // common name
+    `${base}BOUNDARY/${encodeURIComponent(provKey)}.geojson`,
+    `${base}BOUNDARIES/${encodeURIComponent(provKey)}.geojson`,
+    `${base}boundary/${encodeURIComponent(provKey)}.json`,
+    `${base}boundaries/${encodeURIComponent(provKey)}.json`,
     `${base}${encodeURIComponent(provKey)}.geojson`,                      // if placed at root by accident
-    `${base}data/boundaries/${encodeURIComponent(provKey)}.geojson`,      // common alternative structure
-    `./boundaries/${encodeURIComponent(provKey)}.geojson`,                // relative fallback
+    `${base}data/boundary/${encodeURIComponent(provKey)}.geojson`,
+    `${base}data/boundaries/${encodeURIComponent(provKey)}.geojson`,
+    `./boundary/${encodeURIComponent(provKey)}.geojson`,
+    `./boundaries/${encodeURIComponent(provKey)}.geojson`,
   ];
 
   const timeoutMs = 12000;
@@ -679,7 +684,7 @@ async function loadProvinceBoundary(provName) {
        <ol style="margin:6px 0 0 18px">${tried}</ol>
      </details>
      <div style="margin-top:8px">
-       Fix: ensure the file exists on GitHub Pages (case-sensitive), e.g. <b>/boundaries/${provKey}.geojson</b>.
+       Fix: ensure the file exists on GitHub Pages (case-sensitive), e.g. <b>/boundary/${provKey}.geojson</b> (your repo) or <b>/boundaries/${provKey}.geojson</b>.
      </div>`;
   if (msg) msg.innerHTML = 'Boundary missing. Please pick a different province or fix the boundary file.';
   console.error('Boundary load failed:', lastErr);
