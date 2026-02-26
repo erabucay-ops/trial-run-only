@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Spatial Decision Simulator (DEM + Weighted Suitability)</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+  <!-- Turf for distance-to-line calculations -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: rgba(20, 26, 34, 0.92);
+      --text: #e7eef7;
+      --muted: #a9b7c6;
+      --accent: #5dd6ff;
+      --border: rgba(255,255,255,0.12);
+      --shadow: rgba(0,0,0,0.35);
+    }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
+    #app { height: 100%; display: grid; grid-template-columns: 380px 1fr; }
+    #map { height: 100%; width: 100%; }
+
+    .panel {
+      padding: 14px 14px 12px;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      box-shadow: 0 10px 25px var(--shadow);
+      overflow: auto;
+    }
+    .title { font-size: 16px; font-weight: 700; letter-spacing: 0.2px; margin: 2px 0 10px; }
+    .sub { font-size: 12px; color: var(--muted); line-height: 1.35; margin-bottom: 12px; }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      margin: 10px 0;
+      background: rgba(255,255,255,0.03);
+    }
+
+    .row { display: flex; gap: 10px; align-items: center; }
+    .row > * { flex: 1; }
+    label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 6px; }
+    input[type="range"] { width: 100%; }
+    .kpi { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .kpi .box {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(255,255,255,0.02);
+    }
+    .kpi .v { font-size: 16px; font-weight: 700; margin-top: 4px; }
+    .kpi .t { font-size: 11px; color: var(--muted); }
+
+    .status {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      margin-top: 10px;
+    }
+    .dot { width: 12px; height: 12px; border-radius: 999px; background: #999; box-shadow: 0 0 0 3px rgba(255,255,255,0.06) inset; }
+    .status .big { font-weight: 800; }
+    .status .small { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+    .btnrow { display: flex; gap: 10px; }
+    button {
+      flex: 1;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      padding: 10px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 650;
+    }
+    button:hover { border-color: rgba(255,255,255,0.25); }
+    button:active { transform: translateY(1px); }
+
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .warn { color: #ffd27a; }
+    .ok { color: #8dffb5; }
+    .bad { color: #ff8aa6; }
+
+    .foot { font-size: 11px; color: var(--muted); line-height: 1.35; margin-top: 10px; }
+    .foot a { color: var(--accent); text-decoration: none; }
+    .foot a:hover { text-decoration: underline; }
+
+    @media (max-width: 900px) {
+      #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .panel { border-right: none; border-bottom: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div class="panel">
+    <div class="title">Spatial Decision Simulator</div>
+    <div class="sub">
+      Tap/click anywhere in <b><span id="provName">Laguna</span> Province</b> to evaluate site suitability using:
+      <b>real elevation tiles</b> (terrain-based slope), distance to <b>rivers/creeks</b>, and distance to <b>roads</b>.
+      Designed for in-class discussion and spatial reasoning.
+    </div>
+
+    <div class="card">
+      <div style="font-weight:700; margin-bottom:8px;">Select Province</div>
+      <div class="row" style="margin-bottom:10px;">
+        <div style="flex:1.4;">
+          <label>Province (Philippines)</label>
+          <select id="provinceSelect" style="width:100%; padding:10px; border-radius:12px; border:1px solid var(--border); background: rgba(255,255,255,0.04); color: var(--text);">
+          </select>
+        </div>
+        <div style="flex:1;">
+          <label>&nbsp;</label>
+          <button id="btnProvince">Zoom to Province</button>
+        </div>
+      </div>
+      <div class="foot" id="provMsg">Tip: switch provinces to compare how terrain + access changes suitability.</div>
+    </div>
+
+    <div class="card">
+      <div class="btnrow">
+        <button id="btnLaguna" style="display:none;">Zoom to Laguna</button>
+        <button id="btnExplain">What does this mean?</button>
+      </div>
+      <div class="foot" id="msg"></div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:700; margin-bottom:8px;">Weighted scoring (map algebra)</div>
+
+      <div class="row" style="margin-bottom:10px;">
+        <div>
+          <label>Slope weight</label>
+          <input id="wSlope" type="range" min="0" max="100" value="50" />
+          <div class="mono" id="wSlopeV">0.50</div>
+        </div>
+        <div>
+          <label>River risk weight</label>
+          <input id="wRiver" type="range" min="0" max="100" value="30" />
+          <div class="mono" id="wRiverV">0.30</div>
+        </div>
+        <div>
+          <label>Road access weight</label>
+          <input id="wRoad" type="range" min="0" max="100" value="20" />
+          <div class="mono" id="wRoadV">0.20</div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-bottom:10px;">
+        <div>
+          <label>River “safe distance” (m)</label>
+          <input id="riverSafe" type="range" min="50" max="500" value="150" step="10"/>
+          <div class="mono" id="riverSafeV">150 m</div>
+        </div>
+        <div>
+          <label>Road “max walkable” (m)</label>
+          <input id="roadMax" type="range" min="100" max="1500" value="500" step="50"/>
+          <div class="mono" id="roadMaxV">500 m</div>
+        </div>
+        <div>
+          <label>Max “tolerable slope” (°)</label>
+          <input id="slopeMax" type="range" min="5" max="45" value="20" step="1"/>
+          <div class="mono" id="slopeMaxV">20°</div>
+        </div>
+      </div>
+
+      <div class="foot">
+        Question: how does changing weights changes the suitability of an area? e.g. equity vs safety vs access
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:700; margin-bottom:8px;">Results at selected point</div>
+
+      <div class="kpi">
+        <div class="box">
+          <div class="t">Slope (°)</div>
+          <div class="v mono" id="kSlope">—</div>
+        </div>
+        <div class="box">
+          <div class="t">Elevation (m)</div>
+          <div class="v mono" id="kElev">—</div>
+        </div>
+        <div class="box">
+          <div class="t">Dist. to river (m)</div>
+          <div class="v mono" id="kRiver">—</div>
+        </div>
+        <div class="box">
+          <div class="t">Dist. to road (m)</div>
+          <div class="v mono" id="kRoad">—</div>
+        </div>
+      </div>
+
+      <div class="status">
+        <div class="dot" id="dot"></div>
+        <div style="flex:1;">
+          <div class="big" id="kClass">—</div>
+          <div class="small" id="kWhy">Tap the map to evaluate a location.</div>
+        </div>
+        <div class="mono" style="font-weight:800;" id="kScore">—</div>
+      </div>
+
+      <div class="foot" style="margin-top:10px;">
+        Note: Rivers and roads are queried live from OpenStreetMap via the Overpass API (internet required).
+        Elevation is queried from public “Terrarium” elevation tiles (internet required).
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:700; margin-bottom:8px;">Guide Questions</div>
+      <div class="sub" style="margin:0;">
+        1) “Would you site <b>housing</b> here? Why?”<br/>
+        2) “Would this be a good <b>evacuation center</b> site? Why?”<br/>
+        3) “Which weight matters most for <b>low-income</b> communities? Safety, access, or proximity to water?”<br/>
+      </div>
+    </div>
+
+    <div class="foot">
+      
+    </div>
+  </div>
+
+  <div id="map"></div>
+</div>
+
+<script>
+/* =========================
+   Map init (Philippines + selected province)
+   ========================= */
+const phBBox = { south: 4.5, west: 116.9, north: 21.2, east: 126.6 }; // broad PH extent
+let currentProvince = "Laguna";
+
+const map = L.map('map', {
+const boundaryCache = new Map(); // provNameUpper -> GeoJSON Feature
+  zoomControl: true,
+  preferCanvas: true
+}).setView([12.5, 121.7], 6);
+
+const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+// Simple relief-ish overlay (optional)
+const hillshade = L.tileLayer('https://tiles.wmflabs.org/hillshading/{z}/{x}/{y}.png', {
+  maxZoom: 17,
+  opacity: 0.35,
+  attribution: 'Hillshade: Wikimedia Labs'
+}).addTo(map);
+
+let marker = null;
+let lagunaBoundaryLayer = null;
+let lastClickLatLng = null;
+
+/* =========================
+   UI elements
+   ========================= */
+const el = (id) => document.getElementById(id);
+const msg = el('msg');
+
+const sliders = {
+  wSlope: el('wSlope'),
+  wRiver: el('wRiver'),
+  wRoad:  el('wRoad'),
+  riverSafe: el('riverSafe'),
+  roadMax: el('roadMax'),
+  slopeMax: el('slopeMax'),
+};
+
+function setSliderLabels() {
+  const ws = parseFloat(sliders.wSlope.value) / 100;
+  const wr = parseFloat(sliders.wRiver.value) / 100;
+  const wd = parseFloat(sliders.wRoad.value) / 100;
+  el('wSlopeV').textContent = ws.toFixed(2);
+  el('wRiverV').textContent = wr.toFixed(2);
+  el('wRoadV').textContent  = wd.toFixed(2);
+
+  el('riverSafeV').textContent = `${sliders.riverSafe.value} m`;
+  el('roadMaxV').textContent   = `${sliders.roadMax.value} m`;
+  el('slopeMaxV').textContent  = `${sliders.slopeMax.value}°`;
+}
+Object.values(sliders).forEach(s => s.addEventListener('input', () => {
+  setSliderLabels();
+  if (lastClickLatLng) evaluatePoint(lastClickLatLng);
+}));
+setSliderLabels();
+
+/* =========================
+   Helpers: geo + scoring
+   ========================= */
+
+function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+function classifySuitability(suit) {
+  // suit: 0..1 higher is better
+  if (suit >= 0.75) return {label: 'SUITABLE', dot:'#32d47a'};
+  if (suit >= 0.55) return {label: 'MODERATE', dot:'#ffd56a'};
+  return {label: 'HIGH RISK', dot:'#ff6d8f'};
+}
+
+function haversineMeters(a, b) {
+  const R = 6371000;
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat), lat2 = toRad(b.lat);
+  const s = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));
+}
+
+/* =========================
+   Elevation tiles (Terrarium)
+   =========================
+   Tile source encodes elevation:
+   elevation(m) = (R * 256 + G + B / 256) - 32768
+*/
+const TERRARIUM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+const tileCache = new Map();
+
+function tileKey(z,x,y){ return `${z}/${x}/${y}`; }
+
+function lngLatToTileXY(lat, lng, z) {
+  const n = Math.pow(2, z);
+  const xtile = Math.floor((lng + 180) / 360 * n);
+  const latRad = lat * Math.PI / 180;
+  const ytile = Math.floor((1 - Math.log(Math.tan(latRad) + 1/Math.cos(latRad)) / Math.PI) / 2 * n);
+  return {x: xtile, y: ytile};
+}
+
+function tileXYToLngLat(x, y, z) {
+  const n = Math.pow(2, z);
+  const lng = x / n * 360 - 180;
+  const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2*y/n)));
+  const lat = latRad * 180 / Math.PI;
+  return {lat, lng};
+}
+
+async function loadTerrariumTile(z, x, y) {
+  const key = tileKey(z,x,y);
+  if (tileCache.has(key)) return tileCache.get(key);
+
+  const url = TERRARIUM.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+
+  const p = new Promise((resolve, reject) => {
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0);
+      resolve({canvas, ctx, w: img.width, h: img.height});
+    };
+    img.onerror = (e) => reject(new Error('Failed to load elevation tile (CORS or network).'));
+  });
+
+  img.src = url;
+  const tile = await p;
+  tileCache.set(key, tile);
+  return tile;
+}
+
+function elevationFromRGB(r,g,b) {
+  return (r * 256 + g + b / 256) - 32768;
+}
+
+async function getElevationAt(lat, lng, z) {
+  // sample at z (best results around z=12-14)
+  const {x, y} = lngLatToTileXY(lat, lng, z);
+  const tile = await loadTerrariumTile(z, x, y);
+
+  // pixel coords inside tile
+  const n = Math.pow(2, z);
+  const px = ((lng + 180) / 360 * n - x) * tile.w;
+  const latRad = lat * Math.PI / 180;
+  const py = ((1 - Math.log(Math.tan(latRad) + 1/Math.cos(latRad)) / Math.PI) / 2 * n - y) * tile.h;
+
+  const ix = Math.max(0, Math.min(tile.w-1, Math.floor(px)));
+  const iy = Math.max(0, Math.min(tile.h-1, Math.floor(py)));
+
+  const data = tile.ctx.getImageData(ix, iy, 1, 1).data;
+  return elevationFromRGB(data[0], data[1], data[2]);
+}
+
+async function getSlopeDegrees(lat, lng, z) {
+  // Horn-style estimate using 3x3 around pixel.
+  // We approximate ground resolution using meters-per-pixel at this latitude.
+  const {x, y} = lngLatToTileXY(lat, lng, z);
+  const tile = await loadTerrariumTile(z, x, y);
+
+  const n = Math.pow(2, z);
+  const px = ((lng + 180) / 360 * n - x) * tile.w;
+  const latRad = lat * Math.PI / 180;
+  const py = ((1 - Math.log(Math.tan(latRad) + 1/Math.cos(latRad)) / Math.PI) / 2 * n - y) * tile.h;
+
+  const cx = Math.max(1, Math.min(tile.w-2, Math.floor(px)));
+  const cy = Math.max(1, Math.min(tile.h-2, Math.floor(py)));
+
+  const sample = (dx, dy) => {
+    const data = tile.ctx.getImageData(cx + dx, cy + dy, 1, 1).data;
+    return elevationFromRGB(data[0], data[1], data[2]);
+  };
+
+  const z1 = sample(-1,-1), z2 = sample(0,-1), z3 = sample(1,-1);
+  const z4 = sample(-1, 0), z5 = sample(0, 0), z6 = sample(1, 0);
+  const z7 = sample(-1, 1), z8 = sample(0, 1), z9 = sample(1, 1);
+
+  // meters per pixel at this latitude (approx WebMercator)
+  const earthCirc = 40075016.686; // meters
+  const mPerPixel = (earthCirc * Math.cos(latRad)) / (tile.w * n);
+
+  // Horn derivatives
+  const dzdx = ((z3 + 2*z6 + z9) - (z1 + 2*z4 + z7)) / (8 * mPerPixel);
+  const dzdy = ((z7 + 2*z8 + z9) - (z1 + 2*z2 + z3)) / (8 * mPerPixel);
+
+  const slopeRad = Math.atan(Math.sqrt(dzdx*dzdx + dzdy*dzdy));
+  return { slopeDeg: slopeRad * 180/Math.PI, elev: z5 };
+}
+
+/* =========================
+   Overpass: roads + rivers
+   ========================= */
+// Overpass endpoints (failover). 429 = rate-limited; we automatically try the next endpoint.
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.ru/api/interpreter'
+];
+
+// Throttle + cache to avoid hammering Overpass during rapid classroom clicking
+const OVERPASS_MIN_INTERVAL_MS = 1200;   // cooldown between Overpass calls
+const OSM_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+let _lastOverpassCallTs = 0;
+const _osmCache = new Map(); // key -> {ts, data}
+
+function _cacheKey(lat, lng, zoom) {
+  // ~100-150m grid (3 decimals ~111m lat). Include zoom bucket to avoid mixing scales.
+  const latK = lat.toFixed(3);
+  const lngK = lng.toFixed(3);
+  const zK = Math.max(6, Math.min(14, Math.round(zoom)));
+  return `${latK},${lngK},z${zK}`;
+}
+
+async function overpassQuery(query) {
+  // Simple throttle: prevent rapid-fire requests (students tapping fast)
+  const now = Date.now();
+  const since = now - _lastOverpassCallTs;
+  if (since < OVERPASS_MIN_INTERVAL_MS) {
+    // Don't fail; just wait enough to respect cooldown
+    await new Promise(r => setTimeout(r, OVERPASS_MIN_INTERVAL_MS - since));
+  }
+
+  const body = 'data=' + encodeURIComponent(query);
+
+  let lastErr = null;
+  for (let i = 0; i < OVERPASS_ENDPOINTS.length; i++) {
+    const endpoint = OVERPASS_ENDPOINTS[i];
+
+    try {
+      _lastOverpassCallTs = Date.now();
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body
+      });
+
+      // 429: rate limit -> try next endpoint after a short backoff
+      if (res.status === 429) {
+        lastErr = new Error(`Overpass rate-limited (429) at ${endpoint}`);
+        await new Promise(r => setTimeout(r, 900 + i * 400));
+        continue;
+      }
+
+      // 5xx: transient -> try next endpoint
+      if (res.status >= 500) {
+        lastErr = new Error(`Overpass server error (${res.status}) at ${endpoint}`);
+        await new Promise(r => setTimeout(r, 700 + i * 300));
+        continue;
+      }
+
+      if (!res.ok) {
+        // other errors usually not recoverable, but try next anyway
+        lastErr = new Error(`Overpass API error: ${res.status} at ${endpoint}`);
+        await new Promise(r => setTimeout(r, 400 + i * 200));
+        continue;
+      }
+
+      return await res.json();
+
+    } catch (e) {
+      lastErr = e;
+      await new Promise(r => setTimeout(r, 500 + i * 250));
+      continue;
+    }
+  }
+
+  // If we get here, all endpoints failed
+  throw new Error(
+    'Overpass is busy (429) or unreachable right now. ' +
+    'Slow down clicks for ~10–30 seconds and try again, or switch province and retry.'
+  );
+}
+
+
+function osmToLineFeatures(osmJson) {
+  // Convert Overpass "ways" with geometry to GeoJSON LineString features (turf)
+  const features = [];
+  for (const el of osmJson.elements || []) {
+    if (el.type === 'way' && el.geometry && el.geometry.length >= 2) {
+      const coords = el.geometry.map(g => [g.lon, g.lat]);
+      features.push(turf.lineString(coords, el.tags || {}));
+    }
+  }
+  return features;
+}
+
+function minDistanceMetersToLines(pt, lineFeatures) {
+  if (!lineFeatures.length) return null;
+  let min = Infinity;
+  for (const lf of lineFeatures) {
+    const d = turf.pointToLineDistance(pt, lf, {units:'kilometers'}) * 1000;
+    if (d < min) min = d;
+  }
+  return min;
+}
+
+async function getDistancesToOSM(lat, lng) {
+  // Cache per grid cell to drastically reduce Overpass calls in class
+  const zoom = map.getZoom();
+  const key = _cacheKey(lat, lng, zoom);
+  const now = Date.now();
+
+  const cached = _osmCache.get(key);
+  if (cached && (now - cached.ts) < OSM_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  // Query radius: smaller radius = fewer features = fewer bytes = less chance of 429/timeouts
+  // Use slightly larger radius when zoomed out.
+  const R = (zoom <= 8) ? 2200 : (zoom <= 10 ? 1800 : 1400);
+
+  // Filter to common planning-relevant road classes and waterway types
+  const q = `
+  [out:json][timeout:18];
+  (
+    way(around:${R},${lat},${lng})["waterway"~"river|stream|canal|drain"];
+    way(around:${R},${lat},${lng})["natural"="water"];
+    way(around:${R},${lat},${lng})["highway"~"motorway|trunk|primary|secondary|tertiary|residential|unclassified|service"];
+  );
+  out geom;`;
+
+  const json = await overpassQuery(q);
+
+  const pt = turf.point([lng, lat]);
+  const ways = (json.elements || []).filter(e => e.type === 'way' && e.geometry);
+
+  const rivers = osmToLineFeatures({elements: ways.filter(w => (w.tags && (w.tags.waterway || (w.tags.natural === 'water'))))});
+  const roads  = osmToLineFeatures({elements: ways.filter(w => (w.tags && w.tags.highway))});
+
+  const dRiver = minDistanceMetersToLines(pt, rivers);
+  const dRoad  = minDistanceMetersToLines(pt, roads);
+
+  const data = { dRiver, dRoad, rivers, roads };
+  _osmCache.set(key, { ts: now, data });
+
+  return data;
+}
+
+/* =========================
+   Boundary (Laguna) via Overpass relation
+   ========================= */
+
+/* =========================
+   Boundary (Laguna) via Overpass relation
+   ========================= */
+async function loadProvinceBoundary(provName) {
+  msg.innerHTML = `<span class="warn">Loading ${provName} boundary…</span>`;
+  el('provName').textContent = provName;
+  currentProvince = provName;
+
+  // Local-first boundary loading to avoid Overpass 429 rate limits in class settings.
+  // If you add files under ./boundaries/ (e.g., MARINDUQUE.geojson), the app will use them instantly.
+  const provKey = String(provName || '').trim().toUpperCase();
+  if (boundaryCache.has(provKey)) {
+    try {
+      if (lagunaBoundaryLayer) map.removeLayer(lagunaBoundaryLayer);
+    } catch (e) {}
+    const cached = boundaryCache.get(provKey);
+    lagunaBoundaryLayer = L.geoJSON(cached, { style: { color: '#00d1ff', weight: 2, fillOpacity: 0.04 } }).addTo(map);
+    currentProvinceGeoJSON = lagunaBoundaryLayer.toGeoJSON();
+    boundaryCache.set(provKey, gj);
+    const b = lagunaBoundaryLayer.getBounds();
+    if (b && b.isValid()) map.fitBounds(b, { padding:[14,14] });
+    msg.innerHTML = 'Tap/click the map to evaluate a location.';
+    return;
+  }
+
+  // Try local boundary file first (recommended for stability): boundaries/<PROVINCE>.geojson
+  try {
+    const localUrl = `boundaries/${encodeURIComponent(provKey)}.geojson`;
+    const resp = await fetch(localUrl, { cache: 'force-cache' });
+    if (resp.ok) {
+      const localGJ = await resp.json();
+      boundaryCache.set(provKey, localGJ);
+      try { if (lagunaBoundaryLayer) map.removeLayer(lagunaBoundaryLayer); } catch (e) {}
+      lagunaBoundaryLayer = L.geoJSON(localGJ, { style: { color: '#00d1ff', weight: 2, fillOpacity: 0.04 } }).addTo(map);
+      currentProvinceGeoJSON = lagunaBoundaryLayer.toGeoJSON();
+      const b = lagunaBoundaryLayer.getBounds();
+      if (b && b.isValid()) map.fitBounds(b, { padding:[14,14] });
+      msg.innerHTML = 'Tap/click the map to evaluate a location.';
+      return;
+    }
+  } catch (e) {
+    // ignore and fall back to Overpass
+  }
+
+  try {
+    // Constrain search to Philippines to reduce ambiguity
+    const q = `
+    [out:json][timeout:25];
+    area["ISO3166-1"="PH"]->.ph;
+    rel(area.ph)["boundary"="administrative"]["admin_level"="4"]["name"="${provName}"];
+    out geom;`;
+
+    const json = await overpassQuery(q);
+
+    // Build polygon rings from relation members
+    let polys = [];
+    for (const relEl of json.elements || []) {
+      if (relEl.type === 'relation' && relEl.members) {
+        for (const m of relEl.members) {
+          if (m.geometry && m.geometry.length >= 3) {
+            const coords = m.geometry.map(g => [g.lon, g.lat]);
+            if (coords.length && (coords[0][0] !== coords[coords.length-1][0] || coords[0][1] !== coords[coords.length-1][1])) {
+              coords.push(coords[0]);
+            }
+            polys.push(coords);
+          }
+        }
+      }
+    }
+
+    if (!polys.length) throw new Error('Boundary geometry not returned by Overpass.');
+
+    const gj = {
+      "type":"Feature",
+      "properties":{"name":provName},
+      "geometry":{
+        "type":"MultiPolygon",
+        "coordinates": polys.map(ring => [ring])
+      }
+    };
+
+    if (lagunaBoundaryLayer) map.removeLayer(lagunaBoundaryLayer);
+    lagunaBoundaryLayer = L.geoJSON(gj, {
+      style: { color: '#5dd6ff', weight: 2, fillOpacity: 0.06 }
+    }).addTo(map);
+
+    // Zoom to the loaded boundary
+    const b = lagunaBoundaryLayer.getBounds();
+    map.fitBounds(b, { padding:[14,14] });
+
+    msg.innerHTML = `<span class="ok">${provName} boundary loaded.</span>`;
+    el('provMsg').innerHTML = `Selected province: <b>${provName}</b>. Click the map to evaluate a site.`;
+  } catch (e) {
+    // Fallback: zoom to Philippines extent and show error; evaluation can still work anywhere.
+    if (lagunaBoundaryLayer) { map.removeLayer(lagunaBoundaryLayer); lagunaBoundaryLayer = null; }
+    const bounds = L.latLngBounds([[phBBox.south, phBBox.west],[phBBox.north, phBBox.east]]);
+    map.fitBounds(bounds, { padding:[10,10] });
+    msg.innerHTML = `<span class="warn">Could not load ${provName} boundary.</span> ${e.message || e}`;
+    el('provMsg').innerHTML = `<span class="warn">Boundary not loaded.</span> You can still click anywhere, but the app won't clip to the province.`;
+  }
+}
+
+
+/* =========================
+   Evaluation pipeline
+   ========================= */
+function setKPI(id, val, suffix='') {
+  el(id).textContent = (val === null || val === undefined || Number.isNaN(val)) ? '—' : `${val}${suffix}`;
+}
+function setStatus(label, dotColor, score, why) {
+  el('kClass').textContent = label;
+  el('dot').style.background = dotColor;
+  el('kScore').textContent = (score === null ? '—' : score.toFixed(2));
+  el('kWhy').textContent = why || '';
+}
+
+async function evaluatePoint(latlng) {
+  lastClickLatLng = latlng;
+
+  if (!marker) {
+    marker = L.circleMarker(latlng, {radius: 8, color:'#ffffff', weight:2, fillColor:'#5dd6ff', fillOpacity:0.9}).addTo(map);
+  } else {
+    marker.setLatLng(latlng);
+  }
+
+  setStatus('Evaluating…', '#999', null, 'Fetching elevation + OSM features (roads/rivers).');
+  setKPI('kSlope', null);
+  setKPI('kElev', null);
+  setKPI('kRiver', null);
+  setKPI('kRoad', null);
+
+  const z = Math.max(11, Math.min(14, map.getZoom())); // stable sampling zoom
+  try {
+    // 1) Slope + elev from Terrarium
+    const {slopeDeg, elev} = await getSlopeDegrees(latlng.lat, latlng.lng, z);
+
+    // 2) Distances from OSM
+    const {dRiver, dRoad} = await getDistancesToOSM(latlng.lat, latlng.lng);
+
+    // show KPIs
+    setKPI('kSlope', slopeDeg.toFixed(1), '°');
+    setKPI('kElev', elev.toFixed(0), ' m');
+    setKPI('kRiver', dRiver === null ? 'n/a' : dRiver.toFixed(0), dRiver === null ? '' : ' m');
+    setKPI('kRoad', dRoad === null ? 'n/a' : dRoad.toFixed(0), dRoad === null ? '' : ' m');
+
+    // 3) Weighted scoring
+    const wSlope = parseFloat(sliders.wSlope.value) / 100;
+    const wRiver = parseFloat(sliders.wRiver.value) / 100;
+    const wRoad  = parseFloat(sliders.wRoad.value) / 100;
+    const wSum = Math.max(1e-9, wSlope + wRiver + wRoad);
+
+    const slopeMax = parseFloat(sliders.slopeMax.value);  // degrees
+    const riverSafe = parseFloat(sliders.riverSafe.value); // meters
+    const roadMax  = parseFloat(sliders.roadMax.value);    // meters
+
+    const slopeRisk = clamp01(slopeDeg / slopeMax); // 0 good, 1 bad
+    const riverRisk = (dRiver === null) ? 0.5 : clamp01((riverSafe - dRiver) / riverSafe); // closer than safe => risk up
+    const roadRisk  = (dRoad === null)  ? 0.5 : clamp01(dRoad / roadMax); // farther than roadMax => risk up
+
+    const risk = (wSlope*slopeRisk + wRiver*riverRisk + wRoad*roadRisk) / wSum;
+    const suit = 1 - risk;
+
+    const cls = classifySuitability(suit);
+
+    const why = [
+      `Slope risk: ${(slopeRisk*100).toFixed(0)}%`,
+      `River risk: ${(riverRisk*100).toFixed(0)}%`,
+      `Road access risk: ${(roadRisk*100).toFixed(0)}%`
+    ].join(' • ');
+
+    setStatus(cls.label, cls.dot, suit, why);
+
+  } catch (e) {
+    setStatus('Could not evaluate', '#ff8aa6', null, (e && e.message ? e.message : String(e)));
+  }
+}
+
+/* =========================
+   Map events
+   ========================= */
+map.on('click', (e) => evaluatePoint(e.latlng));
+
+// (Legacy) Laguna button hidden; kept for backwards compatibility
+el('btnLaguna').addEventListener('click', () => {
+  loadProvinceBoundary('Laguna');
+});
+
+el('btnExplain').addEventListener('click', () => {
+  alert(
+`How the score works (simple map algebra):
+
+1) We estimate slope (°) from real elevation tiles.
+2) We query OpenStreetMap for nearby rivers/creeks and roads, then compute distances.
+3) We normalize each factor to a 0–1 “risk” score:
+   - Slope risk = slope / max tolerable slope
+   - River risk = (safe distance - dist_to_river) / safe distance (only risky when too close)
+   - Road risk  = dist_to_road / max walkable distance (farther = worse)
+4) Total suitability = 1 - weighted average of risks.
+
+Change weights to reflect different planning priorities (safety vs access vs proximity to water).`
+  );
+});
+
+// Provinces list (as commonly used in PH admin_level=4 OSM boundary relations)
+const PROVINCES = [
+  "Abra","Agusan del Norte","Agusan del Sur","Aklan","Albay","Antique","Apayao","Aurora","Basilan","Bataan","Batanes","Batangas",
+  "Benguet","Biliran","Bohol","Bukidnon","Bulacan","Cagayan","Camarines Norte","Camarines Sur","Camiguin","Capiz","Catanduanes","Cavite",
+  "Cebu","Cotabato","Davao de Oro","Davao del Norte","Davao del Sur","Davao Occidental","Davao Oriental","Dinagat Islands","Eastern Samar",
+  "Guimaras","Ifugao","Ilocos Norte","Ilocos Sur","Iloilo","Isabela","Kalinga","La Union","Laguna","Lanao del Norte","Lanao del Sur","Leyte",
+  "Maguindanao del Norte","Maguindanao del Sur","Marinduque","Masbate","Misamis Occidental","Misamis Oriental","Mountain Province",
+  "Negros Occidental","Negros Oriental","Northern Samar","Nueva Ecija","Nueva Vizcaya","Occidental Mindoro","Oriental Mindoro",
+  "Palawan","Pampanga","Pangasinan","Quezon","Quirino","Rizal","Romblon","Samar","Sarangani","Siquijor","Sorsogon",
+  "South Cotabato","Southern Leyte","Sultan Kudarat","Sulu","Surigao del Norte","Surigao del Sur","Tarlac","Tawi-Tawi",
+  "Zambales","Zamboanga del Norte","Zamboanga del Sur","Zamboanga Sibugay"
+];
+
+function populateProvinceSelect() {
+  const sel = el('provinceSelect');
+  sel.innerHTML = "";
+  for (const p of PROVINCES) {
+    const opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p;
+    sel.appendChild(opt);
+  }
+  sel.value = currentProvince;
+  el('provName').textContent = currentProvince;
+
+  sel.addEventListener('change', () => {
+    loadProvinceBoundary(sel.value);
+  });
+}
+
+el('btnProvince').addEventListener('click', () => {
+  const sel = el('provinceSelect');
+  loadProvinceBoundary(sel.value);
+});
+
+// On load: initialize provinces + load default boundary
+(function init() {
+  populateProvinceSelect();
+  loadProvinceBoundary(currentProvince);
+  msg.innerHTML = 'Tap/click the map to evaluate a location.';
+})();
+</script>
+</body>
+</html>
