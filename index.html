@@ -591,104 +591,63 @@ async function getDistancesToOSM(lat, lng) {
    Boundary (Laguna) via Overpass relation
    ========================= */
 async function loadProvinceBoundary(provName) {
-  msg.innerHTML = `<span class="warn">Loading ${provName} boundary…</span>`;
-  el('provName').textContent = provKey;
-  currentProvince = provName;
+  const provKey = String(provName || "").toUpperCase().trim();
 
-  // Local-first boundary loading to avoid Overpass 429 rate limits in class settings.
-  // If you add files under ./boundaries/ (e.g., MARINDUQUE.geojson), the app will use them instantly.
-  const provKey = String(provName || '').trim().toUpperCase();
+  currentProvince = provKey;
+  el('provName').textContent = provKey;
+
+  const msg = el('msg');
+  el('provMsg').innerHTML = `Loading boundary for <b>${provKey}</b> (local file)…`;
+
+  // Cache to avoid re-fetching
   if (boundaryCache.has(provKey)) {
-    try {
-      if (lagunaBoundaryLayer) map.removeLayer(lagunaBoundaryLayer);
-    } catch (e) {}
-    const cached = boundaryCache.get(provKey);
-    lagunaBoundaryLayer = L.geoJSON(cached, { style: { color: '#00d1ff', weight: 2, fillOpacity: 0.04 } }).addTo(map);
-    currentProvinceGeoJSON = lagunaBoundaryLayer.toGeoJSON();
+    const gj = boundaryCache.get(provKey);
+    if (lagunaBoundaryLayer) map.removeLayer(lagunaBoundaryLayer);
+    lagunaBoundaryLayer = L.geoJSON(gj, { style: { color: '#5dd6ff', weight: 2, fillOpacity: 0.06 } }).addTo(map);
+    try { currentProvinceGeoJSON = lagunaBoundaryLayer.toGeoJSON(); } catch (e) {}
     const b = lagunaBoundaryLayer.getBounds();
-    if (b && b.isValid()) map.fitBounds(b, { padding:[14,14] });
+    if (b && b.isValid && b.isValid()) map.fitBounds(b, { padding:[14,14] });
     msg.innerHTML = 'Tap/click the map to evaluate a location.';
     el('provMsg').innerHTML = `Selected province: <b>${provKey}</b>. Click the map to evaluate a site.`;
     return;
   }
 
-  // Try local boundary file first (recommended for stability): boundaries/<PROVINCE>.geojson
-  try {
-    const localUrl = `boundaries/${encodeURIComponent(provKey)}.geojson`;
-    const resp = await fetch(localUrl, { cache: 'force-cache' });
-    if (resp.ok) {
-      const localGJ = await resp.json();
-      boundaryCache.set(provKey, localGJ);
-      try { if (lagunaBoundaryLayer) map.removeLayer(lagunaBoundaryLayer); } catch (e) {}
-      lagunaBoundaryLayer = L.geoJSON(localGJ, { style: { color: '#00d1ff', weight: 2, fillOpacity: 0.04 } }).addTo(map);
-      currentProvinceGeoJSON = lagunaBoundaryLayer.toGeoJSON();
-      const b = lagunaBoundaryLayer.getBounds();
-      if (b && b.isValid()) map.fitBounds(b, { padding:[14,14] });
-      msg.innerHTML = 'Tap/click the map to evaluate a location.';
-      el('provMsg').innerHTML = `Selected province: <b>${provKey}</b>. Click the map to evaluate a site.`;
-      return;
-    }
-  } catch (e) {
-    // ignore and fall back to Overpass
-  }
+  // Local boundaries (GitHub Pages): /boundaries/PROVINCE.geojson (CAPS, exact match)
+  // Use absolute URL based on current page so it works for repo subpaths (e.g., /trial-run-only/)
+  const base = new URL('.', window.location.href).href;
+  const url = `${base}boundaries/${encodeURIComponent(provKey)}.geojson`;
 
   try {
-    // Constrain search to Philippines to reduce ambiguity
-    const q = `
-    [out:json][timeout:25];
-    area["ISO3166-1"="PH"]->.ph;
-    rel(area.ph)["boundary"="administrative"]["admin_level"="4"]["name"~"^${provKey}$",i];
-    out geom;`;
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
 
-    const json = await overpassQuery(q);
+    const gj = await res.json();
 
-    // Build polygon rings from relation members
-    let polys = [];
-    for (const relEl of json.elements || []) {
-      if (relEl.type === 'relation' && relEl.members) {
-        for (const m of relEl.members) {
-          if (m.geometry && m.geometry.length >= 3) {
-            const coords = m.geometry.map(g => [g.lon, g.lat]);
-            if (coords.length && (coords[0][0] !== coords[coords.length-1][0] || coords[0][1] !== coords[coords.length-1][1])) {
-              coords.push(coords[0]);
-            }
-            polys.push(coords);
-          }
-        }
-      }
-    }
-
-    if (!polys.length) throw new Error('Boundary geometry not returned by Overpass.');
-
-    const gj = {
-      "type":"Feature",
-      "properties":{"name":provName},
-      "geometry":{
-        "type":"MultiPolygon",
-        "coordinates": polys.map(ring => [ring])
-      }
-    };
+    boundaryCache.set(provKey, gj);
 
     if (lagunaBoundaryLayer) map.removeLayer(lagunaBoundaryLayer);
-    lagunaBoundaryLayer = L.geoJSON(gj, {
-      style: { color: '#5dd6ff', weight: 2, fillOpacity: 0.06 }
-    }).addTo(map);
+    lagunaBoundaryLayer = L.geoJSON(gj, { style: { color: '#5dd6ff', weight: 2, fillOpacity: 0.06 } }).addTo(map);
 
-    // Zoom to the loaded boundary
+    // Use Leaflet-normalized GeoJSON for clip checks (more robust)
+    try { currentProvinceGeoJSON = lagunaBoundaryLayer.toGeoJSON(); } catch (e) {}
+
     const b = lagunaBoundaryLayer.getBounds();
-    map.fitBounds(b, { padding:[14,14] });
+    if (b && b.isValid && b.isValid()) map.fitBounds(b, { padding:[14,14] });
 
-    msg.innerHTML = `<span class="ok">${provName} boundary loaded.</span>`;
-    el('provMsg').innerHTML = `Selected province: <b>${provName}</b>. Click the map to evaluate a site.`;
-  } catch (e) {
-    // Fallback: zoom to Philippines extent and show error; evaluation can still work anywhere.
-    if (lagunaBoundaryLayer) { map.removeLayer(lagunaBoundaryLayer); lagunaBoundaryLayer = null; }
-    const bounds = L.latLngBounds([[phBBox.south, phBBox.west],[phBBox.north, phBBox.east]]);
-    map.fitBounds(bounds, { padding:[10,10] });
-    msg.innerHTML = `<span class="warn">Could not load ${provName} boundary.</span> ${e.message || e}`;
-    el('provMsg').innerHTML = `<span class="warn">Boundary not loaded.</span> You can still click anywhere, but the app won't clip to the province.`;
+    msg.innerHTML = 'Tap/click the map to evaluate a location.';
+    el('provMsg').innerHTML = `Selected province: <b>${provKey}</b>. Click the map to evaluate a site.`;
+
+  } catch (err) {
+    // Hard fail (no Overpass fallback): this is intentional to avoid 429 and ensure stable teaching tool behavior.
+    el('provMsg').innerHTML =
+      `<span class="bad">Could not load ${provKey} boundary.</span><br/>
+       Expected file: <span class="mono">${url}</span><br/>
+       Fix: ensure <b>/boundaries/${provKey}.geojson</b> exists in your GitHub Pages site (CAPS, exact filename).`;
+    if (msg) msg.innerHTML = 'Boundary missing. Please pick a different province or fix the boundary file.';
+    console.error('Boundary load failed:', err);
   }
 }
+
 
 
 /* =========================
